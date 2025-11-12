@@ -1,0 +1,11 @@
+streamlit
+PyPDF2
+pdfplumber
+transformers
+spacy
+scikit-learn
+matplotlib
+plotly
+
+autifulsoup4
+requests
