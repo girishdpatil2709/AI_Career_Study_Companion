@@ -6,6 +6,5 @@ spacy
 scikit-learn
 matplotlib
 plotly
-
-autifulsoup4
+beautifulsoup4
 requests
