@@ -472,5 +472,5 @@ if mode == "Saved Sessions":
         st.info("No saved sessions yet. Use Save buttons in other sections.")
 
 # ---------------- Footer / tips ----------------
-st.markdown("---")
-st.markdown("*Tips:*\n\n- If transformer models are slow or unavailable, features fall back to simpler methods. \n- For reliable resume-job matching you can expand JOB_ROLES in the file or add a JSON. \n- For a demo, prepare one study PDF and one resume PDF in data/ and show both flows.\n\nGood luck with your evaluation! 🚀")
+# st.markdown("---")
+# st.markdown("*Tips:*\n\n- If transformer models are slow or unavailable, features fall back to simpler methods. \n- For reliable resume-job matching you can expand JOB_ROLES in the file or add a JSON. \n- For a demo, prepare one study PDF and one resume PDF in data/ and show both flows.\n\nGood luck with your evaluation! 🚀")
