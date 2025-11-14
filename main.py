@@ -1,11 +1,4 @@
-# main.py
-# AI Career & Study Companion - single-file version
-# COPY-PASTE this entire file into main.py
-#
-# Requirements (install once in your venv):
-# pip install streamlit pdfplumber transformers sentence-transformers spacy nltk matplotlib fpdf
-# python -m spacy download en_core_web_sm
-# (If memory is low, you can remove sentence-transformers usage; code will still run for basic features.)
+# AI Career & Study Companion - single-file (modified: safe NLTK usage & fallbacks)
 
 import streamlit as st
 import pdfplumber
@@ -16,32 +9,78 @@ import os
 from datetime import datetime, timedelta
 from random import choice, sample, shuffle
 import nltk
-nltk.download('punkt', quiet=True)
 
-# Try importing heavy libraries; give friendly message if missing.
+# Auto-download required NLTK packages if missing
+nltk.download("punkt")
+nltk.download("stopwords")
+nltk.download("wordnet")
+
+# ---------------- NLTK setup & safe tokenizers ----------------
+# Try to ensure punkt is available; fallback to naive split if not.
+def ensure_nltk_punkt():
+    try:
+        nltk.data.find("tokenizers/punkt")
+        return True
+    except LookupError:
+        try:
+            nltk.download("punkt", quiet=True)
+            nltk.data.find("tokenizers/punkt")
+            return True
+        except Exception:
+            return False
+
+_HAVE_PUNKT = ensure_nltk_punkt()
+
+def safe_sent_tokenize(text):
+    """Use nltk.sent_tokenize if punkt is available; otherwise fallback."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    if _HAVE_PUNKT:
+        try:
+            return nltk.tokenize.sent_tokenize(text)
+        except Exception:
+            pass
+    # fallback naive splitter
+    parts = re.split(r'(?<=[.!?])\s+', text)
+    parts = [p.strip() for p in parts if p.strip()]
+    return parts
+
+def safe_word_tokenize(sent):
+    """Use nltk.word_tokenize if available; otherwise a regex-based fallback."""
+    if not sent:
+        return []
+    if _HAVE_PUNKT:
+        try:
+            return nltk.word_tokenize(sent)
+        except Exception:
+            pass
+    # fallback: grab alphanumeric tokens and apostrophes
+    return re.findall(r"[A-Za-z0-9']+", sent)
+
+# ---------------- Try importing heavy libraries; give friendly message if missing ----------------
 have_transformers = True
 have_sbert = True
 have_spacy = True
 try:
     from transformers import pipeline
-except Exception as e:
+except Exception:
     have_transformers = False
 
 try:
     from sentence_transformers import SentenceTransformer, util
-except Exception as e:
+except Exception:
     have_sbert = False
 
 try:
     import spacy
     nlp = spacy.load("en_core_web_sm")
-except Exception as e:
+except Exception:
     have_spacy = False
     nlp = None
 
 # --------------------------
 # Simple in-file job roles (sample)
-# You can expand these later or replace with a JSON file.
 # --------------------------
 JOB_ROLES = {
     "Data Scientist": ["Python", "Machine Learning", "Pandas", "NumPy", "Statistics", "SQL"],
@@ -88,12 +127,12 @@ def extract_text_from_pdf_filelike(filelike):
                 if page_text:
                     text += page_text + "\n"
             return text.strip()
-    except Exception as e:
+    except Exception:
         return ""
 
 # Simple text cleanup
 def clean_text(t):
-    return re.sub(r'\s+', ' ', t).strip()
+    return re.sub(r'\s+', ' ', (t or "")).strip()
 
 # --------------------------
 # Student module: summarizer, quiz generator, revision schedule
@@ -106,7 +145,7 @@ def get_summarizer():
         if not have_transformers:
             _summarizer = None
             return None
-        # use a smallish summarization model that is good on CPU
+        # use a smallish summarization model that is better on CPU
         try:
             _summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
         except Exception:
@@ -122,8 +161,8 @@ def summarize_text(text, max_length=200):
         return text  # too short to summarize
     summ = get_summarizer()
     if summ is None:
-        # fallback naive summary: first 3 sentences
-        sents = nltk.tokenize.sent_tokenize(text)
+        # fallback naive summary: first 3 sentences using safe_sent_tokenize
+        sents = safe_sent_tokenize(text)
         return " ".join(sents[:3])
     # chunk if very long
     words = text.split()
@@ -138,16 +177,16 @@ def summarize_text(text, max_length=200):
         out = summ(text, max_length=max_length, min_length=40, do_sample=False)
         return out[0]['summary_text']
 
-# Simple quiz generator (rule-based)
+# Simple quiz generator (rule-based) using safe tokenizers
 def generate_simple_mcqs(text, num_q=5):
-    sents = nltk.tokenize.sent_tokenize(text)
+    sents = safe_sent_tokenize(text)
     candidates = [s for s in sents if len(s) > 40]
     if not candidates:
         candidates = sents
     chosen = candidates[:num_q] if len(candidates) >= num_q else (candidates + sents)[:num_q]
     mcqs = []
     for sent in chosen:
-        words = [w for w in nltk.word_tokenize(sent) if w.isalpha()]
+        words = [w for w in safe_word_tokenize(sent) if w.isalpha()]
         if len(words) < 5:
             continue
         key = choice(words[1:-1]) if len(words) > 2 else words[0]
@@ -171,7 +210,6 @@ def generate_revision_schedule(exam_date_str, days_before=14, frequency_per_week
     try:
         exam = datetime.fromisoformat(exam_date_str)
     except Exception:
-        # try other formats
         exam = datetime.strptime(exam_date_str, "%Y-%m-%d")
     start = exam - timedelta(days=days_before)
     schedule = []
@@ -188,18 +226,16 @@ def generate_revision_schedule(exam_date_str, days_before=14, frequency_per_week
 # --------------------------
 # Career module: resume parsing, scoring, skill-gap detection, learning plan
 # --------------------------
-# Simple contact extractor
 def extract_contact_info(text):
     email = re.search(r'[\w\.-]+@[\w\.-]+', text)
     phone = re.search(r'(\+?\d[\d\-\s]{7,}\d)', text)
     return {'email': email.group(0) if email else None,
             'phone': phone.group(0).strip() if phone else None}
 
-# Extract skills by matching against a skills pool (from JOB_ROLES)
 ALL_SKILLS_POOL = sorted(list({s for skills in JOB_ROLES.values() for s in skills}), key=lambda x: x.lower())
 
 def extract_skills_from_text(text, skills_pool=None):
-    t = text.lower()
+    t = (text or "").lower()
     found = []
     pool = skills_pool if skills_pool else ALL_SKILLS_POOL
     for s in pool:
@@ -213,28 +249,24 @@ def extract_skills_from_text(text, skills_pool=None):
                 found.append(nc.text.strip())
     return list(dict.fromkeys(found))  # unique preserve order
 
-# Resume scoring (simple heuristic)
 def score_resume(skills_found, text):
     score = 30
     score += min(len(skills_found), 10) * 5
-    if 'project' in text.lower():
+    if 'project' in (text or "").lower():
         score += 10
-    if 'experience' in text.lower() or 'intern' in text.lower():
+    if 'experience' in (text or "").lower() or 'intern' in (text or "").lower():
         score += 10
-    # bonus for contact
     contact = extract_contact_info(text)
     if contact.get('email') or contact.get('phone'):
         score += 5
     return min(score, 100)
 
-# Detect skill gaps comparing to a target role
 def detect_skill_gaps(skills_found, target_role):
     required = JOB_ROLES.get(target_role, [])
     missing = [s for s in required if s.lower() not in [x.lower() for x in skills_found]]
     present = [s for s in required if s.lower() in [x.lower() for x in skills_found]]
     return {'required': required, 'present': present, 'missing': missing}
 
-# Optional: simple semantic job recommender using sentence-transformers if available
 _sbert = None
 def get_sbert():
     global _sbert
@@ -246,13 +278,10 @@ def get_sbert():
     return _sbert
 
 def recommend_jobs_by_resume(skills_found, job_list=None, top_k=5):
-    # job_list is a list of dicts with 'title' and 'description'
-    # For demo, build job_list from JOB_ROLES
     jobs = []
     for role, skills in JOB_ROLES.items():
         jobs.append({'title': role, 'description': " ".join(skills)})
     if not have_sbert:
-        # fallback: match by overlapping skills count
         scores = []
         for job in jobs:
             req = [w.lower() for w in job['description'].split()]
@@ -272,7 +301,6 @@ def recommend_jobs_by_resume(skills_found, job_list=None, top_k=5):
     scored.sort(reverse=True, key=lambda x: x[0])
     return [j for _, j in scored[:top_k]]
 
-# Build a simple learning plan for missing skills
 def build_learning_plan(missing_skills):
     plan = []
     for skill in missing_skills:
@@ -293,10 +321,8 @@ st.set_page_config(page_title="AI Career & Study Companion", layout="wide")
 st.title("AI Career & Study Companion")
 st.markdown("*A dual-mode Python app:* Student Study Assistant (summarize + quiz + revision) and Career Coach (resume review + skill gaps + learning plan).")
 
-# Sidebar navigation
 mode = st.sidebar.selectbox("Choose Mode", ["Home", "Student Study Assistant", "Career Coach", "Saved Sessions"])
 
-# Home / Info
 if mode == "Home":
     st.header("👋 Welcome")
     st.write("""
@@ -318,12 +344,10 @@ if mode == "Student Study Assistant":
 
     text = ""
     if uploaded_file:
-        # streamlit gives UploadedFile which behaves like file object
         if uploaded_file.type == "application/pdf":
             with st.spinner("Extracting text from PDF..."):
                 text = extract_text_from_pdf_filelike(uploaded_file)
         else:
-            # txt
             text = uploaded_file.getvalue().decode("utf-8")
     if text_input and not text:
         text = text_input
@@ -331,19 +355,17 @@ if mode == "Student Study Assistant":
     if text:
         st.subheader("Preview (first 800 chars)")
         st.write(clean_text(text)[:800] + ("..." if len(clean_text(text))>800 else ""))
-        # Save session
         if st.button("Save this session (study)"):
             save_session("student", "notes", text[:1000])
             st.success("Saved session to database.")
 
-        # Summarize
         if st.button("Generate Summary"):
             with st.spinner("Generating summary..."):
                 summary = summarize_text(text)
             st.subheader("📝 Summary")
             st.write(summary)
             st.download_button("Download Summary", summary, file_name="summary.txt")
-        # Quiz
+
         if st.button("Generate Quiz (5 questions)"):
             with st.spinner("Generating quiz..."):
                 mcqs = generate_simple_mcqs(text, num_q=5)
@@ -353,7 +375,7 @@ if mode == "Student Study Assistant":
                 for opt in q['options']:
                     st.write("-", opt)
                 st.write(f"Answer: {q['answer']}")
-        # Revision schedule
+
         st.subheader("⏰ Revision Planner")
         exam_date = st.date_input("If you have an exam date, choose it (optional)", value=None)
         days_before = st.number_input("Start revisions how many days before exam?", min_value=1, max_value=180, value=14)
@@ -364,7 +386,6 @@ if mode == "Student Study Assistant":
             st.write("Suggested revision dates:")
             for d in schedule:
                 st.write("-", d)
-            # save schedule summary
             save_session("student", f"revision_{ed}", json.dumps(schedule))
     else:
         st.info("Upload a PDF or paste text to begin.")
@@ -390,16 +411,13 @@ if mode == "Career Coach":
     if resume_text:
         st.subheader("Preview (first 800 chars)")
         st.write(clean_text(resume_text)[:800] + ("..." if len(clean_text(resume_text))>800 else ""))
-        # Save raw resume session
         if st.button("Save this resume session"):
             save_session("career", "resume", resume_text[:1000])
             st.success("Saved resume session to database.")
 
-        # Contact info
         contact = extract_contact_info(resume_text)
         st.write("*Contact found:*", contact)
 
-        # Skills detection
         st.write("---")
         st.subheader("🔎 Detected Skills")
         skills_found = extract_skills_from_text(resume_text, skills_pool=ALL_SKILLS_POOL)
@@ -408,11 +426,9 @@ if mode == "Career Coach":
         else:
             st.write(skills_found)
 
-        # Resume scoring
         score = score_resume(skills_found, resume_text)
         st.metric("Resume Score", f"{score}/100")
 
-        # Choose target role to detect gaps
         roles_list = ["-- None --"] + list(JOB_ROLES.keys())
         selected_role = st.selectbox("Select target role to compare with", roles_list)
         if selected_role != "-- None --":
@@ -420,7 +436,6 @@ if mode == "Career Coach":
             st.write("*Required skills for role:*", gaps['required'])
             st.write("*Present (from resume):*", gaps['present'])
             st.write("*Missing skills:*", gaps['missing'])
-            # Learning plan
             if st.button("Build learning plan for missing skills"):
                 plan = build_learning_plan(gaps['missing'])
                 st.subheader("📚 Learning Plan")
@@ -428,10 +443,8 @@ if mode == "Career Coach":
                     st.write(f"- *{p['skill']}* (approx {p['duration_days']} days). Resources:")
                     for r in p['resources']:
                         st.write("  -", r)
-                # Save plan
                 save_session("career", f"plan_{selected_role}", json.dumps(plan))
 
-        # Job recommendations
         st.write("---")
         if st.button("Recommend matching jobs (based on skills)"):
             with st.spinner("Finding matching jobs..."):
@@ -461,5 +474,3 @@ if mode == "Saved Sessions":
 # ---------------- Footer / tips ----------------
 st.markdown("---")
 st.markdown("*Tips:*\n\n- If transformer models are slow or unavailable, features fall back to simpler methods. \n- For reliable resume-job matching you can expand JOB_ROLES in the file or add a JSON. \n- For a demo, prepare one study PDF and one resume PDF in data/ and show both flows.\n\nGood luck with your evaluation! 🚀")
-
-
